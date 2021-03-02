@@ -55,6 +55,10 @@ def createHyperparameterLenDict(model):
     hyperparameterLenDict = {}
     for index, layer in enumerate(model.typeLayer):
         hyperparameterLenDict['layer{}'.format(index)] = []
-        for weight in layer.trainable_weights:
-             hyperparameterLenDict['layer{}'.format(index)].append(weight.shape)
+        for weight in layer.weights:
+            hyperparameterLenDict['layer{}'.format(index)].append(weight.shape)
     return hyperparameterLenDict
+
+def updateHyperparameters(hyperparametersDict, model):
+    for index, layer in enumerate(model.typeLayer):
+        layer.set_weights(hyperparametersDict['layer{}'.format(index)])

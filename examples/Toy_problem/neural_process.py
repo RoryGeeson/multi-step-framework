@@ -172,7 +172,7 @@ class NeuralProcess(tf.keras.Model):
         ELBO = self.ELBO(z_distribution_c, self.z_distribution, train)
         return ELBO
 
-    def gradients(self,context, train, both):
+    def gradients(self, context, train, both):
         """
         Calculate gradient of objective w.r.t. parameters
         :param dataset: dictionary containing context, train, and both datasets for training in the given epoch
