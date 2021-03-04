@@ -1,8 +1,6 @@
 import tensorflow as tf
-# import dgl
 import dgl.nn.tensorflow as dglt
 from numpy import prod
-# DGLBACKEND=tensorflow
 
 class multiNet(tf.keras.Model):
     """"""
@@ -20,8 +18,6 @@ class multiNet(tf.keras.Model):
             'GINConv': dglt.GINConv
         }
 
-        # self.stageGraph = stageGraph
-
         self.h_dim = h_dim + 1
         self.n_layers = n_layers
 
@@ -30,17 +26,13 @@ class multiNet(tf.keras.Model):
         for l in range(n_layers):
             self.typeLayer.append(network_type_dict[network_type](self.h_dim, self.h_dim, **kwargs))
             self.typeLayer[l].trainable = False
-
         for layer in self.typeLayer:
             _ = layer(stageGraph, tf.zeros([stageGraph.number_of_nodes(),self.h_dim]))
 
-    def call(self, stageGraph):
+    def call(self, h_inputs, stageGraph):
         """"""
-        print(tf.concat([stageGraph.ndata['h_inputs'], stageGraph.ndata['objectives']], 1))
-        h = self.typeLayer[0](stageGraph, tf.concat([stageGraph.ndata['h_inputs'], stageGraph.ndata['objectives']], 1))
-        if self.typeLayer[0].name == 'gat_conv':
-            h = tf.reduce_mean(h, axis=1)
-        for index, layer in enumerate(self.typeLayer[1:]):
+        h = tf.concat([h_inputs, stageGraph.ndata['objectives']], 1)
+        for index, layer in enumerate(self.typeLayer):
             h = layer(stageGraph, h)
             if self.typeLayer[0].name == 'gat_conv':
                 h = tf.reduce_mean(h, axis=1)
@@ -62,12 +54,12 @@ class multiHyperNet(tf.keras.Model):
 
         self.preferenceEncoderNet = tf.keras.Sequential([
             tf.keras.layers.InputLayer(input_shape=(1,self.objectiveNum)),
-            # tf.keras.layers.Dense(self.preferenceEncodeDim, activation= 'relu'),
             tf.keras.layers.Dense(self.preferenceEncodeDim)
         ])
 
         self.hyperparameterGeneratorNet = tf.keras.Sequential([
             tf.keras.layers.InputLayer(input_shape=(self.numLayers,self.preferenceEncodeDim)),
+            tf.keras.layers.Dense(self.hyperparameterGeneratorDim),
             tf.keras.layers.Dense(self.hyperparameterGeneratorDim),
             tf.keras.layers.Dense(self.weightsPerLayer, activation='tanh')
         ])
@@ -75,24 +67,13 @@ class multiHyperNet(tf.keras.Model):
 
     def hyperparameterGenerator(self, preferenceEncoding):
         """"""
-
         preferenceEncodingTiled = tf.tile(preferenceEncoding, [self.numLayers,1])
         hyperparameters = self.hyperparameterGeneratorNet(preferenceEncodingTiled)
-
-        # Create dictionary for the hyperparameters
-        hyperparametersDict = {}
-        for layerNum, key in enumerate(self.hyperparameterLenDict.keys()):
-            hyperparametersDict[key] = []
-            numWeights = 0
-            for weightGroup in self.hyperparameterLenDict[key]:
-                groupNumWeights = tf.reduce_prod(weightGroup)
-                hyperparametersDict[key].append(tf.reshape(tf.slice(hyperparameters, [layerNum, numWeights], [1, groupNumWeights]),weightGroup))
-                numWeights += groupNumWeights
-        return hyperparametersDict
+        return hyperparameters
 
     def call(self, objectiveWeightings):
         """"""
         preferenceEncoding = self.preferenceEncoderNet(objectiveWeightings)
-        hyperparametersDict = self.hyperparameterGenerator(preferenceEncoding)
+        hyperparameters = self.hyperparameterGenerator(preferenceEncoding)
 
-        return hyperparametersDict
+        return hyperparameters
