@@ -46,3 +46,23 @@ def updateHyperparameters(hyperparameterLenDict, hyperparameters, model):
 def scaleInputs(inputs, inputRanges):
     scaledInputs = tf.math.multiply(inputs, inputRanges[:,0]) + inputRanges[:,1]
     return scaledInputs
+
+def flatten(flattenable):
+    def flatten2(flattenable):
+        for i in flattenable:
+            if isinstance(i, list):
+                for j in flatten2(i):
+                    yield j
+            else:
+                yield i
+    return list(flatten2(flattenable))
+
+def calculateOffset(stageGraph, stageID):
+    try:
+        previousStages = stageGraph.stagePrevious[stageID]
+    except:
+        return 0
+    offset = 0
+    for stage in previousStages:
+        offset += len(stage[1])
+    return offset

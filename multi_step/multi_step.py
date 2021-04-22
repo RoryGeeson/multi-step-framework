@@ -116,14 +116,15 @@ class objectiveFunctions():
         for index, ID in enumerate(self.objectiveIDs):
             objectiveVariableValues = []
             for variable in self.objectiveVariableIDs[ID]:
+                variableOffset = calculateOffset(stageGraph, variable[0].stageID)
                 if variable[1] == 'inputs':
                     try:
-                        objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID][variable[2]])
+                        objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID][variable[2]-variableOffset])
                     except:
                         objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID])
                 else:
                     try:
-                        objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID][variable[2]])
+                        objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID][variable[2]-variableOffset])
                     except:
                         objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID])
             stageGraph.nodes[ID].data['objectives'] = tf.reshape(self.objectives[ID](*objectiveVariableValues),[1,1])
@@ -134,23 +135,25 @@ class objectiveFunctions():
         for index, ID in enumerate(self.objectiveIDs):
             objectiveVariableValues = []
             for variable in self.objectiveVariableIDs[ID]:
+                variableOffset = calculateOffset(stageGraph, variable[0].stageID)
                 if variable[1] == 'inputs':
                     if nodeDataIdentifier == 'inputs':
                         try:
-                            objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID][variable[2]])
+                            objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID][variable[2]-variableOffset])
                         except:
                             objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID])
                     else:
                         try:
-                            objectiveVariableValues.append(stageGraph.stageGeneratedInputs[variable[0].stageID][variable[2]])
+                            objectiveVariableValues.append(stageGraph.stageGeneratedInputs[variable[0].stageID][variable[2]-variableOffset])
                         except:
                             objectiveVariableValues.append(stageGraph.stageGeneratedInputs[variable[0].stageID])
                 else:
                     try:
-                        objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID][variable[2]])
+                        objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID][variable[2]-variableOffset])
                     except:
                         objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID])
             objectiveValue += self.objectives[ID](*objectiveVariableValues) * objectiveWeightings[0, index]
+            print(objectiveValue)
         return objectiveValue
 
 class multi_step_graph():
@@ -256,6 +259,8 @@ class multi_step_graph():
         for objectiveWeightings in tf.linalg.normalize(tf.random.uniform(shape=[numObjectiveSamples,self.numObjectives], maxval=1), ord=1, axis=1)[0]:
             for epoch in range(epochs):
                 loss = self.epoch(tf.expand_dims(objectiveWeightings, 0), trainableVariables)
-                if epoch % 10 == 0:
+                if epoch % 1 == 0:
                     print('Weightings: {}, Epoch: {}, Loss: {}'.format(objectiveWeightings.numpy(),epoch,loss))
                     print(self.stageGraph.stageGeneratedInputs.values())
+
+        return self.stageGraph.stageGeneratedInputs.values()
