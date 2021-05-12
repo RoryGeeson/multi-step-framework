@@ -42,6 +42,13 @@ def updateHyperparameters(hyperparameterLenDict, hyperparameters, model):
             startInd = endInd
             endInd = startInd + tf.reduce_prod(layerWeights[2])
             layer.fc.kernel = tf.reshape(hyperparameters[index,startInd:endInd], layerWeights[2])
+        elif 'graph_conv' in layer.name:
+            startInd = 0
+            endInd = startInd + tf.reduce_prod(layerWeights[0])
+            layer.weight = tf.reshape(hyperparameters[index, startInd:endInd], layerWeights[0])
+            startInd = endInd
+            endInd = startInd + tf.reduce_prod(layerWeights[1])
+            layer.bias = tf.reshape(hyperparameters[index, startInd:endInd], layerWeights[1])
 
 def scaleInputs(inputs, inputRanges):
     scaledInputs = tf.math.multiply(inputs, inputRanges[:,0]) + inputRanges[:,1]

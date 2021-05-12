@@ -4,6 +4,7 @@ from .models import *
 import dgl
 import tensorflow.keras.optimizers as optimizers
 import numpy as np
+from math import inf
 
 def stageGraphDecorator(graph):
     setattr(graph, 'stages', {})
@@ -12,7 +13,7 @@ def stageGraphDecorator(graph):
     setattr(graph, 'stageOutputs', {})
     setattr(graph, 'stageGeneratedInputs', {})
     setattr(graph, 'stagePrevious', {})
-    setattr(graph, 'stageParameters', {})
+    # setattr(graph, 'stageParameters', {})
     setattr(graph, 'stageInputRanges', {})
     setattr(graph, 'stageInputLength', {})
     setattr(graph, 'stageOutputLength', {})
@@ -23,7 +24,7 @@ def stageGraphDecorator(graph):
     def loadStages(self, stages):
         for stage in stages:
             self.stageIDs.append(stage.stageID)
-            self.stageParameters[stage.stageID] = stage.model.trainable_variables
+            # self.stageParameters[stage.stageID] = stage.model.trainable_variables
             self.stages[stage.stageID] = stage.model
 
             inputRanges = np.array(stage.inputRanges)
@@ -75,7 +76,7 @@ def stageGraphDecorator(graph):
                 else:
                     modelInputs = self.stageInputs[stageID]
             if self.stages[stageID].name == 'gpr':
-                output = tf.squeeze(self.stages[stageID].predict_f(tf.expand_dims(modelInputs,0))[0])
+                output = tf.squeeze(self.stages[stageID].predict_f(Xnew=tf.expand_dims(modelInputs,0))[0])
             else:
                 output = self.stages[stageID].evaluateModel(modelInputs)
             self.stageOutputs[stageID] = output
@@ -99,6 +100,7 @@ class objectiveFunctions():
     def __init__(self, objectives, stageGraph):
         self.objectiveIDs = []
         self.objectives = {}
+        self.objectiveScalings = {}
         self.objectiveVariableIDs = {}
         self.defineObjectives(objectives, stageGraph)
 
@@ -109,52 +111,88 @@ class objectiveFunctions():
             objectiveID = objectiveIndex + num_stages
             self.objectiveIDs.append(objectiveID)
             self.objectives[objectiveID] = objective.objectiveFunction
+            self.objectiveScalings[objectiveID] = -inf
             self.objectiveVariableIDs[objectiveID] = objective.objectiveVariables
             stageGraph.add_edges([objectiveID]*len(stageGraph.stageIDs), stageGraph.stageIDs)
 
-    def calculateObjectives(self, stageGraph):
-        for index, ID in enumerate(self.objectiveIDs):
-            objectiveVariableValues = []
-            for variable in self.objectiveVariableIDs[ID]:
-                variableOffset = calculateOffset(stageGraph, variable[0].stageID)
-                if variable[1] == 'inputs':
+    def normaliseObjective(self, objectiveValue, objectiveID):
+        return objectiveValue
+        # if objectiveValue > self.objectiveScalings[objectiveID]:
+        #     self.objectiveScalings[objectiveID] = objectiveValue
+        # return objectiveValue / tf.math.abs(self.objectiveScalings[objectiveID])
+        # if objectiveValue < 0:
+        #     return self.objectiveScalings[objectiveID] / tf.math.abs(objectiveValue)
+        # else:
+        #     return objectiveValue / tf.math.abs(self.objectiveScalings[objectiveID])
+
+
+        # if objectiveValue < 0:
+        #     if objectiveValue > self.objectiveScalings[objectiveID]:
+        #         self.objectiveScalings[objectiveID] = objectiveValue
+        #     return objectiveValue / tf.math.abs(self.objectiveScalings[objectiveID])
+        # else:
+        #     if self.objectiveScalings[objectiveID]
+
+        # if tf.math.abs(objectiveValue) > self.objectiveScalings[objectiveID]:
+        #     self.objectiveScalings[objectiveID] = tf.math.abs(objectiveValue)
+        # return objectiveValue / self.objectiveScalings[objectiveID]
+
+    def calculateObjective(self, stageGraph, objectiveID, nodeDataIdentifier='inputs'):
+        objectiveVariableValues = []
+        for variable in self.objectiveVariableIDs[objectiveID]:
+            variableOffset = calculateOffset(stageGraph, variable[0].stageID)
+            if variable[1] == 'inputs':
+                if nodeDataIdentifier == 'inputs':
                     try:
-                        objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID][variable[2]-variableOffset])
+                        objectiveVariableValues.append(
+                            stageGraph.stageInputs[variable[0].stageID][variable[2] - variableOffset])
                     except:
                         objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID])
                 else:
                     try:
-                        objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID][variable[2]-variableOffset])
+                        objectiveVariableValues.append(
+                            stageGraph.stageGeneratedInputs[variable[0].stageID][variable[2] - variableOffset])
                     except:
-                        objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID])
-            stageGraph.nodes[ID].data['objectives'] = tf.reshape(self.objectives[ID](*objectiveVariableValues),[1,1])
+                        objectiveVariableValues.append(stageGraph.stageGeneratedInputs[variable[0].stageID])
+            else:
+                try:
+                    objectiveVariableValues.append(
+                        stageGraph.stageOutputs[variable[0].stageID][variable[2] - variableOffset])
+                except:
+                    objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID])
+        # print(stageGraph.stageInputs.values())
+        # print('objectiveVariableValues: ',objectiveVariableValues)
+        objectiveValue = tf.reshape(self.objectives[objectiveID](*objectiveVariableValues), [1, 1])
+        # if objectiveValue > self.objectiveScalings[objectiveID]:
+        #     self.objectiveScalings[objectiveID] = objectiveValue
+        # return objectiveValue / self.objectiveScalings[objectiveID]
+        return objectiveValue
+
+    def calculateObjectives(self, stageGraph):
+        for ID in self.objectiveIDs:
+            # stageGraph.nodes[ID].data['objectives'] = self.calculateObjective(stageGraph, ID)
+            objectiveValueUnnorm = self.calculateObjective(stageGraph, ID)
+            stageGraph.nodes[ID].data['objectives'] = self.normaliseObjective(objectiveValueUnnorm, ID)
 
     def calculateWeightedObjective(self, stageGraph, objectiveWeightings, nodeDataIdentifier):
         """"""
         objectiveValue = 0
         for index, ID in enumerate(self.objectiveIDs):
-            objectiveVariableValues = []
-            for variable in self.objectiveVariableIDs[ID]:
-                variableOffset = calculateOffset(stageGraph, variable[0].stageID)
-                if variable[1] == 'inputs':
-                    if nodeDataIdentifier == 'inputs':
-                        try:
-                            objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID][variable[2]-variableOffset])
-                        except:
-                            objectiveVariableValues.append(stageGraph.stageInputs[variable[0].stageID])
-                    else:
-                        try:
-                            objectiveVariableValues.append(stageGraph.stageGeneratedInputs[variable[0].stageID][variable[2]-variableOffset])
-                        except:
-                            objectiveVariableValues.append(stageGraph.stageGeneratedInputs[variable[0].stageID])
-                else:
-                    try:
-                        objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID][variable[2]-variableOffset])
-                    except:
-                        objectiveVariableValues.append(stageGraph.stageOutputs[variable[0].stageID])
-            objectiveValue += self.objectives[ID](*objectiveVariableValues) * objectiveWeightings[0, index]
-            print(objectiveValue)
+            objectiveValueUnnorm = self.calculateObjective(stageGraph, ID, nodeDataIdentifier)
+            objectiveValue += self.normaliseObjective(objectiveValueUnnorm,ID) * objectiveWeightings[0, index]
+            # objectiveValue += self.calculateObjective(stageGraph, ID, nodeDataIdentifier) * objectiveWeightings[0, index]
         return objectiveValue
+
+    def unnormalisedObjectives(self, stageGraph):
+        objectiveList = []
+        for ID in self.objectiveIDs:
+            objectiveValue = self.calculateObjective(stageGraph, ID, 'stageGeneratedInputs')
+            objectiveList.append((objectiveValue.numpy()))
+        return np.squeeze(np.array(objectiveList))
+
+    def resetScalings(self):
+        for scalingKey in self.objectiveScalings.keys():
+            self.objectiveScalings[scalingKey] = -inf
 
 class multi_step_graph():
     """"""
@@ -208,14 +246,19 @@ class multi_step_graph():
     def epoch(self, objectiveWeightings, trainableVariables):
         """"""
         self.assignRandomInput()
+        # print('Random Inputs: ',self.stageGraph.stageInputs.values())
         self.calculateModelOutputs('inputs')
+        # print('Caluclated Outputs: ',self.stageGraph.stageOutputs.values())
         self.objectiveFunctions.calculateObjectives(self.stageGraph)
         with tf.GradientTape() as tape:
             hyperparameters = self.multiHyperNet(objectiveWeightings)
+            # print(hyperparameters)
             updateHyperparameters(self.hyperparameterLenDict, hyperparameters, self.multiNet)
             h_inputs = tf.zeros([0,self.h_dim])
             for stageID in self.stageGraph.stageIDs:
-                h_inputs = tf.concat([h_inputs, self.stageGraph.stageEncoders[stageID](tf.expand_dims(self.stageGraph.stageInputs[stageID], 0))], axis=0)
+                stuff = tf.reshape(self.stageGraph.stageEncoders[stageID](tf.expand_dims(self.stageGraph.stageInputs[stageID], 0)),[1,self.h_dim])
+                h_inputs = tf.concat([h_inputs, stuff], axis=0)
+                # h_inputs = tf.concat([h_inputs, self.stageGraph.stageEncoders[stageID](tf.expand_dims(self.stageGraph.stageInputs[stageID], 0))], axis=0)
             h_inputs = tf.concat([h_inputs,tf.zeros([self.numObjectives, self.h_dim])], axis=0)
             h = self.multiNet(h_inputs, self.stageGraph)
             for stageID in self.stageGraph.stageIDs:
@@ -223,6 +266,7 @@ class multi_step_graph():
                     tf.expand_dims(h[stageID, :], 0)))
                 self.stageGraph.stageGeneratedInputs[stageID] = scaleInputs(unscaledStageGeneratedInputs, self.stageGraph.stageInputRanges[stageID])
             objectiveValue = self.calculateObjectiveValue(objectiveWeightings, 'stageGeneratedInputs')
+            print('ObjectiveValue: ',objectiveValue)
             loss = -objectiveValue
         gradients = tape.gradient(loss, trainableVariables)
         self.optimizer.apply_gradients(zip(gradients, trainableVariables))
@@ -238,17 +282,11 @@ class multi_step_graph():
 
         # stage encoders and decoders, used to convert inputs to a standard dimension and outputs from a standard dimension
         for stageID in self.stageGraph.stageIDs:
-            self.stageGraph.stageEncoders[stageID] = tf.keras.models.Sequential([
-                tf.keras.layers.InputLayer(input_shape=(1, self.stageGraph.stageInputLength[stageID])),
-                tf.keras.layers.Dense(h_dim)
-            ])
-            trainableVariables = trainableVariables + self.stageGraph.stageEncoders[stageID].trainable_weights
+            self.stageGraph.stageEncoders[stageID] = stageEncoder(self.stageGraph.stageInputLength[stageID],h_dim)
+            trainableVariables += self.stageGraph.stageEncoders[stageID].trainable_weights
 
-            self.stageGraph.stageDecoders[stageID] = tf.keras.models.Sequential([
-                tf.keras.layers.InputLayer(input_shape=(1, h_dim + 1)),
-                tf.keras.layers.Dense(self.stageGraph.stageInputLength[stageID], activation='tanh')
-            ])
-            trainableVariables = trainableVariables + self.stageGraph.stageDecoders[stageID].trainable_weights
+            self.stageGraph.stageDecoders[stageID] = stageDecoder(self.stageGraph.stageInputLength[stageID], h_dim)
+            trainableVariables += self.stageGraph.stageDecoders[stageID].trainable_weights
 
         self.multiNet = multiNet(self.stageGraph, h_dim, n_layers, network_type, **kwargs)
         self.hyperparameterLenDict = createHyperparameterLenDict(self.multiNet)
@@ -257,10 +295,40 @@ class multi_step_graph():
         trainableVariables = trainableVariables + self.multiHyperNet.trainable_weights
 
         for objectiveWeightings in tf.linalg.normalize(tf.random.uniform(shape=[numObjectiveSamples,self.numObjectives], maxval=1), ord=1, axis=1)[0]:
+            self.objectiveFunctions.resetScalings()
             for epoch in range(epochs):
                 loss = self.epoch(tf.expand_dims(objectiveWeightings, 0), trainableVariables)
                 if epoch % 1 == 0:
-                    print('Weightings: {}, Epoch: {}, Loss: {}'.format(objectiveWeightings.numpy(),epoch,loss))
-                    print(self.stageGraph.stageGeneratedInputs.values())
+                    print('Weightings: {}, Epoch: {}, Loss: {}, Objective values: {}'.format(objectiveWeightings.numpy(),epoch,loss, self.objectiveFunctions.unnormalisedObjectives(self.stageGraph)))
+                    # print('stageOutputs: ',self.stageGraph.stageOutputs.values())
+                    print('stageGeneratedInputs: ',self.stageGraph.stageGeneratedInputs.values())
+                    print('objectiveScalings: ',self.objectiveFunctions.objectiveScalings.values())
 
         return self.stageGraph.stageGeneratedInputs.values()
+
+    def getConditions(self, objectiveWeightings):
+        objectiveWeightings = tf.convert_to_tensor([objectiveWeightings])
+        self.assignRandomInput()
+        self.calculateModelOutputs('inputs')
+        self.objectiveFunctions.calculateObjectives(self.stageGraph)
+        hyperparameters = self.multiHyperNet(objectiveWeightings)
+        # print(hyperparameters)
+        updateHyperparameters(self.hyperparameterLenDict, hyperparameters, self.multiNet)
+        h_inputs = tf.zeros([0, self.h_dim])
+        for stageID in self.stageGraph.stageIDs:
+            stuff = tf.reshape(
+                self.stageGraph.stageEncoders[stageID](tf.expand_dims(self.stageGraph.stageInputs[stageID], 0)),
+                [1, self.h_dim])
+            h_inputs = tf.concat([h_inputs, stuff], axis=0)
+            # h_inputs = tf.concat([h_inputs, self.stageGraph.stageEncoders[stageID](
+            #     tf.expand_dims(self.stageGraph.stageInputs[stageID], 0))], axis=0)
+        h_inputs = tf.concat([h_inputs, tf.zeros([self.numObjectives, self.h_dim])], axis=0)
+        h = self.multiNet(h_inputs, self.stageGraph)
+        for stageID in self.stageGraph.stageIDs:
+            unscaledStageGeneratedInputs = tf.squeeze(self.stageGraph.stageDecoders[stageID](
+                tf.expand_dims(h[stageID, :], 0)))
+            self.stageGraph.stageGeneratedInputs[stageID] = scaleInputs(unscaledStageGeneratedInputs,
+                                                                        self.stageGraph.stageInputRanges[stageID])
+        self.calculateModelOutputs('stageGeneratedInputs')
+        objectiveValues = self.objectiveFunctions.unnormalisedObjectives(self.stageGraph)
+        return list(self.stageGraph.stageGeneratedInputs.values()), objectiveValues

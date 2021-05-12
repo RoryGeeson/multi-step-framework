@@ -36,7 +36,7 @@ class multiNet(tf.keras.Model):
             h = layer(stageGraph, h)
             if self.typeLayer[0].name == 'gat_conv':
                 h = tf.reduce_mean(h, axis=1)
-        return h
+        return tf.squeeze(h)
 
 class multiHyperNet(tf.keras.Model):
     """"""
@@ -52,23 +52,38 @@ class multiHyperNet(tf.keras.Model):
         self.weightsPerLayer = sum(
             [prod(layerWeights) for layerWeights in list(self.hyperparameterLenDict.values())[0]])
 
+        # self.preferenceEncoderNet = tf.keras.Sequential([
+        #     tf.keras.layers.InputLayer(input_shape=(1,self.objectiveNum)),
+        #     tf.keras.layers.Dense(self.preferenceEncodeDim)
+        # ])
+
+        # Navon paper preference encoder
+        # nn.Linear(2, ray_hidden_dim),
+        # nn.ReLU(inplace=True),
+        # nn.Linear(ray_hidden_dim, ray_hidden_dim),
+        # nn.ReLU(inplace=True),
+        # nn.Linear(ray_hidden_dim, ray_hidden_dim)
+
         self.preferenceEncoderNet = tf.keras.Sequential([
-            tf.keras.layers.InputLayer(input_shape=(1,self.objectiveNum)),
-            tf.keras.layers.Dense(self.preferenceEncodeDim)
+            tf.keras.layers.InputLayer(input_shape=(1, self.objectiveNum)),
+            tf.keras.layers.Dense(self.preferenceEncodeDim * self.numLayers, activation='relu'),
+            tf.keras.layers.Dense(self.preferenceEncodeDim * self.numLayers, activation='relu')
         ])
 
         self.hyperparameterGeneratorNet = tf.keras.Sequential([
             tf.keras.layers.InputLayer(input_shape=(self.numLayers,self.preferenceEncodeDim)),
-            tf.keras.layers.Dense(self.hyperparameterGeneratorDim),
-            tf.keras.layers.Dense(self.hyperparameterGeneratorDim),
+            tf.keras.layers.Dense(self.hyperparameterGeneratorDim, activation='softmax'),
+            tf.keras.layers.Dense(self.hyperparameterGeneratorDim, activation='relu'),
             tf.keras.layers.Dense(self.weightsPerLayer, activation='tanh')
         ])
 
 
     def hyperparameterGenerator(self, preferenceEncoding):
         """"""
-        preferenceEncodingTiled = tf.tile(preferenceEncoding, [self.numLayers,1])
-        hyperparameters = self.hyperparameterGeneratorNet(preferenceEncodingTiled)
+        # preferenceEncodingTiled = tf.tile(preferenceEncoding, [self.numLayers,1])
+        # hyperparameters = self.hyperparameterGeneratorNet(preferenceEncodingTiled)
+        preferenceEncoding = tf.reshape(preferenceEncoding, [self.numLayers, -1])
+        hyperparameters = self.hyperparameterGeneratorNet(preferenceEncoding)
         return hyperparameters
 
     def call(self, objectiveWeightings):
@@ -77,3 +92,28 @@ class multiHyperNet(tf.keras.Model):
         hyperparameters = self.hyperparameterGenerator(preferenceEncoding)
 
         return hyperparameters
+
+class stageEncoder(tf.keras.Model):
+    def __init__(self, inputLength, h_dim):
+        super().__init__()
+
+        self.encoderNet = tf.keras.models.Sequential([
+            tf.keras.layers.InputLayer(input_shape=(1, inputLength)),
+            tf.keras.layers.Dense(h_dim)
+        ])
+
+    def call(self, inputs, training=None, mask=None):
+        return self.encoderNet(inputs)
+
+
+class stageDecoder(tf.keras.Model):
+    def __init__(self, inputLength, h_dim):
+        super().__init__()
+
+        self.encoderNet = tf.keras.models.Sequential([
+            tf.keras.layers.InputLayer(input_shape=(1, h_dim + 1)),
+            tf.keras.layers.Dense(inputLength, activation='tanh')
+        ])
+
+    def call(self, inputs, training=None, mask=None):
+        return self.encoderNet(inputs)
