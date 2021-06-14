@@ -76,7 +76,10 @@ def stageGraphDecorator(graph):
                 else:
                     modelInputs = self.stageInputs[stageID]
             if self.stages[stageID].name == 'gpr':
-                output = tf.squeeze(self.stages[stageID].predict_f(Xnew=tf.expand_dims(modelInputs,0))[0])
+                try:
+                    output = tf.squeeze(self.stages[stageID].predict_f(Xnew=tf.expand_dims(modelInputs,0))[0])
+                except:
+                    output = tf.squeeze(self.stages[stageID].predict_f_compiled(Xnew=tf.expand_dims(modelInputs, 0))[0])
             else:
                 output = self.stages[stageID].evaluateModel(modelInputs)
             self.stageOutputs[stageID] = output
@@ -183,11 +186,19 @@ class objectiveFunctions():
             # objectiveValue += self.calculateObjective(stageGraph, ID, nodeDataIdentifier) * objectiveWeightings[0, index]
         return objectiveValue
 
+    def calculateUnnormalisedLosses(self, stageGraph):
+        losses = self.calculateObjective(stageGraph, self.objectiveIDs[0], 'stageGeneratedInputs')
+        if len(self.objectiveIDs) > 1:
+            for ID in self.objectiveIDs[1:]:
+                loss = self.calculateObjective(stageGraph, ID, 'stageGeneratedInputs')
+                losses = tf.concat([losses, loss], axis=0)
+        return losses
+
     def unnormalisedObjectives(self, stageGraph):
         objectiveList = []
         for ID in self.objectiveIDs:
             objectiveValue = self.calculateObjective(stageGraph, ID, 'stageGeneratedInputs')
-            objectiveList.append((objectiveValue.numpy()))
+            objectiveList.append(objectiveValue.numpy())
         return np.squeeze(np.array(objectiveList))
 
     def resetScalings(self):
@@ -197,22 +208,24 @@ class objectiveFunctions():
 class multi_step_graph():
     """"""
 
-    def __init__(self, optAlgo, learning_rate=0.01):
+    def __init__(self, optAlgo, learning_rate=0.01, training='sobol', eps=1e-4):
         """"""
         super().__init__()
 
         self.optimizerDict = {
-            'adadelta': optimizers.Adadelta(learning_rate),
-            'adagrad': optimizers.Adagrad(learning_rate),
-            'adam': optimizers.Adam(learning_rate),
-            'adamax': optimizers.Adamax(learning_rate),
-            'ftrl': optimizers.Ftrl(learning_rate),
-            'nadam': optimizers.Nadam(learning_rate),
-            'rmsprop': optimizers.RMSprop(learning_rate),
-            'sgd': optimizers.SGD(learning_rate)
+            'adadelta': optimizers.Adadelta,
+            'adagrad': optimizers.Adagrad,
+            'adam': optimizers.Adam,
+            'adamax': optimizers.Adamax,
+            'ftrl': optimizers.Ftrl,
+            'nadam': optimizers.Nadam,
+            'rmsprop': optimizers.RMSprop,
+            'sgd': optimizers.SGD
         }
 
-        self.optimizer = self.optimizerDict[optAlgo]
+        self.optimizer = self.optimizerDict[optAlgo](learning_rate)
+        self.training = training
+        self.eps = eps
 
     def loadModels(self, stages):
         """"""
@@ -224,36 +237,73 @@ class multi_step_graph():
     def defineObjectives(self, objectives):
         """"""
         self.numObjectives = len(objectives)
+        self.EPOSolver = EPOSolver(self.numObjectives, eps=self.eps)
         self.objectiveFunctions = objectiveFunctions(objectives, self.stageGraph)
+
+    def assignInput(self, input):
+        for stageID in self.stageGraph.stageIDs:
+            self.stageGraph.stageInputs[stageID] = tf.convert_to_tensor(input[stageID], dtype=tf.float32)
 
     def assignRandomInput(self):
         """"""
         for stageID in self.stageGraph.stageIDs:
-            maxVal = self.stageGraph.stageInputRanges[stageID][:,0]
-            bias = self.stageGraph.stageInputRanges[stageID][:,1]
+            maxVal = self.stageGraph.stageInputRanges[stageID][:, 0]
+            bias = self.stageGraph.stageInputRanges[stageID][:, 1]
             self.stageGraph.stageInputs[stageID] = tf.random.uniform(shape=[self.stageGraph.stageInputLength[stageID]], minval=-maxVal, maxval=maxVal) + bias
+            # self.assignInput(tf.random.uniform(shape=[self.stageGraph.stageInputLength[stageID]], minval=-maxVal,
+            #                                    maxval=maxVal) + bias)
+
+    def getSobolInputs(self, numInputs):
+        """"""
+        inputs = {}
+        inputDictList = []
+        for stageID in self.stageGraph.stageIDs:
+            maxVal = self.stageGraph.stageInputRanges[stageID][:, 0]
+            bias = self.stageGraph.stageInputRanges[stageID][:, 1]
+            conditionRanges = [[bias[i] - maxVal[i], bias[i] + maxVal[i]] for i in range(len(maxVal))]
+            inputs[stageID] = sobolSequenceConditions(conditionRanges, numInputs, reverse=True)
+        for i in range(numInputs):
+            inputDict = {}
+            for stageID in self.stageGraph.stageIDs:
+                inputDict[stageID] = inputs[stageID][i]
+            inputDictList.append(inputDict)
+        return inputDictList
+
+    def getSobolWeightings(selfself, numObjectiveSamples, numObjectives):
+        ranges = [[0,1] for i in range(numObjectives)]
+        weightings = sobolSequenceConditions(ranges, numObjectiveSamples, reverse=True)
+        return tf.convert_to_tensor(weightings, dtype=tf.float32)
 
     def calculateModelOutputs(self, nodeDataIdentifier):
         """"""
         self.stageGraph.calculateOutputs(self.stageGraph, nodeDataIdentifier)
 
-    def calculateObjectiveValue(self, objectiveWeightings, nodeDataIdentifier):
+    def calculateLinearScalarisationLosses(self, objectiveWeightings, nodeDataIdentifier):
         self.stageGraph.calculateOutputs(self.stageGraph, nodeDataIdentifier)
         objectiveValue = self.objectiveFunctions.calculateWeightedObjective(self.stageGraph, objectiveWeightings,
                                                                             nodeDataIdentifier)
         return objectiveValue
 
+    def calculateIndividualLosses(self, nodeDataIdentifier):
+        self.stageGraph.calculateOutputs(self.stageGraph, nodeDataIdentifier)
+        lossValues = -self.objectiveFunctions.calculateUnnormalisedLosses(self.stageGraph)
+        return lossValues
+
+    def calculateEPOLosses(self, losses, objectiveWeightings, parameters, tape):
+        return self.EPOSolver(losses, objectiveWeightings, parameters, tape)
+
     def epoch(self, objectiveWeightings, trainableVariables):
         """"""
-        self.assignRandomInput()
+        # self.assignRandomInput()
         # print('Random Inputs: ',self.stageGraph.stageInputs.values())
         self.calculateModelOutputs('inputs')
         # print('Caluclated Outputs: ',self.stageGraph.stageOutputs.values())
         self.objectiveFunctions.calculateObjectives(self.stageGraph)
-        with tf.GradientTape() as tape:
+        with tf.GradientTape(persistent=True) as tape:#) as tape:
             hyperparameters = self.multiHyperNet(objectiveWeightings)
             # print(hyperparameters)
             updateHyperparameters(self.hyperparameterLenDict, hyperparameters, self.multiNet)
+            # print('weights: ', self.multiNet.variables)
             h_inputs = tf.zeros([0,self.h_dim])
             for stageID in self.stageGraph.stageIDs:
                 stuff = tf.reshape(self.stageGraph.stageEncoders[stageID](tf.expand_dims(self.stageGraph.stageInputs[stageID], 0)),[1,self.h_dim])
@@ -265,20 +315,50 @@ class multi_step_graph():
                 unscaledStageGeneratedInputs = tf.squeeze(self.stageGraph.stageDecoders[stageID](
                     tf.expand_dims(h[stageID, :], 0)))
                 self.stageGraph.stageGeneratedInputs[stageID] = scaleInputs(unscaledStageGeneratedInputs, self.stageGraph.stageInputRanges[stageID])
-            objectiveValue = self.calculateObjectiveValue(objectiveWeightings, 'stageGeneratedInputs')
-            print('ObjectiveValue: ',objectiveValue)
-            loss = -objectiveValue
-        gradients = tape.gradient(loss, trainableVariables)
+            # objectiveValue = self.calculateLinearScalarisationLosses(objectiveWeightings, 'stageGeneratedInputs')
+            losses = self.calculateIndividualLosses(nodeDataIdentifier='stageGeneratedInputs')
+            weighted_loss = self.calculateEPOLosses(losses, objectiveWeightings, trainableVariables, tape)
+            # print('ObjectiveValue: ',objectiveValue)
+            # loss = -objectiveValue
+            # loss = self.calculateEPOLosses(losses, objectiveWeightings)
+        # gradients1 = tape.gradient(losses, trainableVariables)
+        # print(gradients1)
+        # print(losses)
+        # gradients = self.calculateEPOLosses(losses, objectiveWeightings, trainableVariables, tape)
+        gradients = tape.gradient(weighted_loss, trainableVariables)
+        # print('gradients: ',gradients)
         self.optimizer.apply_gradients(zip(gradients, trainableVariables))
-        return loss
+        # tape.reset()
+        return weighted_loss
 
-    def train(self, numObjectiveSamples, preferenceEncodeDim, hyperparameterGeneratorDim, epochs=5, h_dim=5, n_layers=4, network_type='GATConv', **kwargs):
+    def givenInputLoop(self, epochs, objectiveWeightings, trainableVariables, losses=None):
+        for epoch in range(epochs):
+            loss = self.epoch(tf.expand_dims(objectiveWeightings, 0), trainableVariables)
+            if losses != None:
+                losses.append(loss.numpy())
+            if epoch % 5 == 0:
+                print('Weightings: {}, Epoch: {}, Loss: {}, Objective values: {}'.format(objectiveWeightings.numpy(),
+                                                                                         epoch, loss,
+                                                                                         self.objectiveFunctions.unnormalisedObjectives(
+                                                                                             self.stageGraph)))
+                # print('stageOutputs: ',self.stageGraph.stageOutputs.values())
+                # print('stageGeneratedInputs: ',self.stageGraph.stageGeneratedInputs.values())
+                # print('objectiveScalings: ',self.objectiveFunctions.objectiveScalings.values())
+        if losses != None:
+            return losses
+
+    def train(self, numObjectiveSamples, numStartSamples, preferenceEncodeDim, hyperparameterGeneratorDim, epochs=5, h_dim=5, n_layers=4, network_type='GATConv', **kwargs):
         """"""
         print('Starting training')
         self.stageGraph = dgl.transform.add_self_loop(self.stageGraph)
         trainableVariables = []
 
+        losses = []
+
         self.h_dim = h_dim
+
+        inputs = self.getSobolInputs(numStartSamples)
+        print('Inputs: ', inputs)
 
         # stage encoders and decoders, used to convert inputs to a standard dimension and outputs from a standard dimension
         for stageID in self.stageGraph.stageIDs:
@@ -288,23 +368,40 @@ class multi_step_graph():
             self.stageGraph.stageDecoders[stageID] = stageDecoder(self.stageGraph.stageInputLength[stageID], h_dim)
             trainableVariables += self.stageGraph.stageDecoders[stageID].trainable_weights
 
-        self.multiNet = multiNet(self.stageGraph, h_dim, n_layers, network_type, **kwargs)
+        self.multiNet = multiNet(self.stageGraph, h_dim, n_layers, network_type=network_type, **kwargs)
         self.hyperparameterLenDict = createHyperparameterLenDict(self.multiNet)
 
         self.multiHyperNet = multiHyperNet(self.numObjectives, preferenceEncodeDim, hyperparameterGeneratorDim, self.hyperparameterLenDict)
         trainableVariables = trainableVariables + self.multiHyperNet.trainable_weights
+        # print('hyper: ',self.multiHyperNet.trainable_weights)
 
-        for objectiveWeightings in tf.linalg.normalize(tf.random.uniform(shape=[numObjectiveSamples,self.numObjectives], maxval=1), ord=1, axis=1)[0]:
-            self.objectiveFunctions.resetScalings()
-            for epoch in range(epochs):
-                loss = self.epoch(tf.expand_dims(objectiveWeightings, 0), trainableVariables)
-                if epoch % 1 == 0:
-                    print('Weightings: {}, Epoch: {}, Loss: {}, Objective values: {}'.format(objectiveWeightings.numpy(),epoch,loss, self.objectiveFunctions.unnormalisedObjectives(self.stageGraph)))
-                    # print('stageOutputs: ',self.stageGraph.stageOutputs.values())
-                    print('stageGeneratedInputs: ',self.stageGraph.stageGeneratedInputs.values())
-                    print('objectiveScalings: ',self.objectiveFunctions.objectiveScalings.values())
+        if self.training == 'sobol':
+            objectiveWeightingsList = tf.linalg.normalize(self.getSobolWeightings(numObjectiveSamples, self.numObjectives), ord=1, axis=1)[0]
+            # objectiveWeightingsList = self.getSobolWeightings(numObjectiveSamples, self.numObjectives)
+        else:
+            objectiveWeightingsList = tf.linalg.normalize(tf.random.uniform(shape=[numObjectiveSamples, self.numObjectives], maxval=1), ord=1,
+                                axis=1)[0]
+        # print(objectiveWeightingsList)
+        objectiveWeightingsList = tf.convert_to_tensor([[val, 1-val] for val in np.linspace(0.1,0.9,numObjectiveSamples)],dtype=tf.float32)
+        # print(objectiveWeightingsList)
+        # objectiveWeightingsList = tf.expand_dims(tf.range(0,1,0.2),axis=1)
+        # print('Weightings: ',objectiveWeightingsList)
+        # for objectiveWeightings in tf.linalg.normalize(tf.random.uniform(shape=[numObjectiveSamples,self.numObjectives], maxval=1), ord=1, axis=1)[0]:
+        # print(self.getSobolWeightings(numObjectiveSamples, self.numObjectives))
+        # for objectiveWeightings in tf.linalg.normalize(self.getSobolWeightings(numObjectiveSamples, self.numObjectives), ord=1, axis=1)[0]:
+        for objectiveWeightings in objectiveWeightingsList:
+            # print(objectiveWeightings)
+            # self.objectiveFunctions.resetScalings()
+            if self.training == 'sobol':
+                for inputDict in inputs:
+                    self.assignInput(inputDict)
+                    losses = self.givenInputLoop(epochs,objectiveWeightings, trainableVariables, losses=losses)
+            else:
+                for i in range(numStartSamples):
+                    self.assignRandomInput()
+                    losses = self.givenInputLoop(epochs,objectiveWeightings, trainableVariables, losses=losses)
 
-        return self.stageGraph.stageGeneratedInputs.values()
+        return self.stageGraph.stageGeneratedInputs.values(), losses
 
     def getConditions(self, objectiveWeightings):
         objectiveWeightings = tf.convert_to_tensor([objectiveWeightings])
@@ -314,8 +411,10 @@ class multi_step_graph():
         hyperparameters = self.multiHyperNet(objectiveWeightings)
         # print(hyperparameters)
         updateHyperparameters(self.hyperparameterLenDict, hyperparameters, self.multiNet)
+        # print('weights: ',self.multiNet.weights)
         h_inputs = tf.zeros([0, self.h_dim])
         for stageID in self.stageGraph.stageIDs:
+            print(self.stageGraph.stageInputs[stageID])
             stuff = tf.reshape(
                 self.stageGraph.stageEncoders[stageID](tf.expand_dims(self.stageGraph.stageInputs[stageID], 0)),
                 [1, self.h_dim])

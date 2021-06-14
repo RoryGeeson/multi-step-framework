@@ -5,7 +5,7 @@ from numpy import prod
 class multiNet(tf.keras.Model):
     """"""
 
-    def __init__(self, stageGraph, h_dim, n_layers, network_type='GATConv', **kwargs):
+    def __init__(self, stageGraph, h_dim, n_layers, trainable=False, network_type='GATConv', **kwargs):
         super().__init__()
 
         network_type_dict = {
@@ -25,16 +25,17 @@ class multiNet(tf.keras.Model):
 
         for l in range(n_layers):
             self.typeLayer.append(network_type_dict[network_type](self.h_dim, self.h_dim, **kwargs))
-            self.typeLayer[l].trainable = False
+            self.typeLayer[l].trainable = trainable
         for layer in self.typeLayer:
             _ = layer(stageGraph, tf.zeros([stageGraph.number_of_nodes(),self.h_dim]))
 
     def call(self, h_inputs, stageGraph):
         """"""
         h = tf.concat([h_inputs, stageGraph.ndata['objectives']], 1)
+        print(h)
         for index, layer in enumerate(self.typeLayer):
             h = layer(stageGraph, h)
-            if self.typeLayer[0].name == 'gat_conv':
+            if layer.name[0:3] == 'gat':
                 h = tf.reduce_mean(h, axis=1)
         return tf.squeeze(h)
 
@@ -67,14 +68,15 @@ class multiHyperNet(tf.keras.Model):
         self.preferenceEncoderNet = tf.keras.Sequential([
             tf.keras.layers.InputLayer(input_shape=(1, self.objectiveNum)),
             tf.keras.layers.Dense(self.preferenceEncodeDim * self.numLayers, activation='relu'),
-            tf.keras.layers.Dense(self.preferenceEncodeDim * self.numLayers, activation='relu')
+            # tf.keras.layers.Dense(self.preferenceEncodeDim * self.numLayers, activation='relu')
         ])
 
         self.hyperparameterGeneratorNet = tf.keras.Sequential([
             tf.keras.layers.InputLayer(input_shape=(self.numLayers,self.preferenceEncodeDim)),
-            tf.keras.layers.Dense(self.hyperparameterGeneratorDim, activation='softmax'),
+            # tf.keras.layers.Dense(self.hyperparameterGeneratorDim, activation='softmax'),
             tf.keras.layers.Dense(self.hyperparameterGeneratorDim, activation='relu'),
-            tf.keras.layers.Dense(self.weightsPerLayer, activation='tanh')
+            # tf.keras.layers.Dense(self.weightsPerLayer, activation='tanh'),
+            tf.keras.layers.Dense(self.weightsPerLayer)
         ])
 
 
@@ -99,6 +101,7 @@ class stageEncoder(tf.keras.Model):
 
         self.encoderNet = tf.keras.models.Sequential([
             tf.keras.layers.InputLayer(input_shape=(1, inputLength)),
+            tf.keras.layers.Dense(h_dim, activation='tanh'),
             tf.keras.layers.Dense(h_dim)
         ])
 
@@ -112,8 +115,60 @@ class stageDecoder(tf.keras.Model):
 
         self.encoderNet = tf.keras.models.Sequential([
             tf.keras.layers.InputLayer(input_shape=(1, h_dim + 1)),
-            tf.keras.layers.Dense(inputLength, activation='tanh')
+            # tf.keras.layers.Dense(inputLength, activation='tanh')
+            tf.keras.layers.Dense(inputLength, activation='exponential'),
+            tf.keras.layers.Dense(inputLength)
         ])
 
     def call(self, inputs, training=None, mask=None):
         return self.encoderNet(inputs)
+
+class objectiveDecoder(tf.keras.Model):
+    def __init__(self, numObjectives, numStages, h_dim):
+        super().__init__()
+
+        self.encoderNet = tf.keras.models.Sequential([
+            tf.keras.layers.InputLayer(input_shape=(numStages*h_dim,)),
+            tf.keras.layers.Dense(numObjectives, activation='exponential'),
+            tf.keras.layers.Dense(numObjectives)
+        ])
+
+    def call(self, inputs, training=None, mask=None):
+        return self.encoderNet(inputs)
+
+class multiNetPredict(tf.keras.Model):
+    """"""
+
+    def __init__(self, stageGraph, h_dim, n_layers, trainable=True, network_type='GATConv',
+                 **kwargs):
+        super().__init__()
+
+        network_type_dict = {
+            'GraphConv': dglt.GraphConv,
+            'RelGraphConv': dglt.RelGraphConv,
+            'GATConv': dglt.GATConv,
+            'SAGEConv': dglt.SAGEConv,
+            'SGConv': dglt.SGConv,
+            'APPNPConv': dglt.APPNPConv,
+            'GINConv': dglt.GINConv
+        }
+
+        self.h_dim = h_dim
+        self.n_layers = n_layers
+
+        self.typeLayer = []
+
+        for l in range(n_layers):
+            self.typeLayer.append(network_type_dict[network_type](self.h_dim, self.h_dim, **kwargs))
+            self.typeLayer[l].trainable = trainable
+        for layer in self.typeLayer:
+            _ = layer(stageGraph, tf.zeros([stageGraph.number_of_nodes(), self.h_dim]))
+
+    def call(self, h_inputs, stageGraph):
+        """"""
+        # h = tf.concat([h_inputs, stageGraph.ndata['objectives']], 1)
+        for index, layer in enumerate(self.typeLayer):
+            h = layer(stageGraph, h_inputs)
+            if layer.name[0:3] == 'gat':
+                h = tf.reduce_mean(h, axis=1)
+        return tf.squeeze(h)
