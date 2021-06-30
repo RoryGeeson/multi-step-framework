@@ -518,6 +518,7 @@ class multi_step_output_prediction():
         # print('objectivePreds: ',objectivePreds)
         # loss = tf.keras.losses.KLD(objectiveValues, objectivePreds)
         loss = tf.keras.losses.mean_squared_error(objectiveValues,objectivePreds)
+        # loss = tf.keras.losses.mae(objectiveValues, objectivePreds)
         # print(loss)
         return tf.reduce_sum(loss)
 
@@ -597,9 +598,11 @@ class multi_step_output_prediction():
 
         actualObjectiveValues = self.calculateActualObjectives(inputs)
         actualMean = np.mean(actualObjectiveValues)
-        # actualObjectiveValues -= actualMean
-        print(actualMean)
-        print(actualObjectiveValues)
+        actualRange = np.max(actualObjectiveValues) - np.min(actualObjectiveValues)
+        actualObjectiveValues = (actualObjectiveValues - actualMean) / actualRange
+        print('Mean: ',actualMean)
+        print('Range: ',actualRange)
+        # print(actualObjectiveValues)
 
         # print('actual: ', actualObjectiveValues)
         losses = []
@@ -610,9 +613,10 @@ class multi_step_output_prediction():
             # if epoch % 40 == 0:
             #     print(trainableVariables)
 
-        return actualMean, losses
+        return actualMean, actualRange, losses
 
-    def get_results(self, numStartSamples, mean):
+    def get_results(self, numStartSamples, mean, objectiveRange):
+        print(numStartSamples)
         # inputs = self.getSobolInputs(numStartSamples)
         # actualObjectiveValues = self.calculateActualObjectives(inputs)
         # self.assignInput(inputs[0])
@@ -624,7 +628,6 @@ class multi_step_output_prediction():
         # objectiveValues = tf.convert_to_tensor(list(objectiveValue.values()))
         objectivePreds = objectivePred
         for _ in range(numStartSamples-1):
-            # self.assignInput(inputDict)
             self.assignRandomInput()
             self.calculateModelOutputs('inputs')
             self.objectiveFunctions.calculateObjectives(self.stageGraph)
@@ -632,5 +635,5 @@ class multi_step_output_prediction():
             objectivePred = self.givenInputLoop()#objectiveValue,
             # objectiveValues = tf.concat([objectiveValues, tf.convert_to_tensor(list(objectiveValue.values()))], axis=1)
             objectivePreds = tf.concat([objectivePreds, objectivePred], axis=1)
-        # objectivePreds += mean
+        objectivePreds = (objectivePreds * objectiveRange) + mean
         return np.squeeze(np.array(actualObjectiveValues)), objectivePreds.numpy()

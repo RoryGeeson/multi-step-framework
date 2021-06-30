@@ -32,7 +32,7 @@ class multiNet(tf.keras.Model):
     def call(self, h_inputs, stageGraph):
         """"""
         h = tf.concat([h_inputs, stageGraph.ndata['objectives']], 1)
-        print(h)
+        # print(h)
         for index, layer in enumerate(self.typeLayer):
             h = layer(stageGraph, h)
             if layer.name[0:3] == 'gat':
@@ -68,12 +68,14 @@ class multiHyperNet(tf.keras.Model):
         self.preferenceEncoderNet = tf.keras.Sequential([
             tf.keras.layers.InputLayer(input_shape=(1, self.objectiveNum)),
             tf.keras.layers.Dense(self.preferenceEncodeDim * self.numLayers, activation='relu'),
-            # tf.keras.layers.Dense(self.preferenceEncodeDim * self.numLayers, activation='relu')
+            # tf.keras.layers.Dense(self.preferenceEncodeDim * self.numLayers, activation='relu'),
+            tf.keras.layers.Dense(self.preferenceEncodeDim * self.numLayers)
         ])
 
         self.hyperparameterGeneratorNet = tf.keras.Sequential([
             tf.keras.layers.InputLayer(input_shape=(self.numLayers,self.preferenceEncodeDim)),
             # tf.keras.layers.Dense(self.hyperparameterGeneratorDim, activation='softmax'),
+            tf.keras.layers.Dense(self.hyperparameterGeneratorDim, activation='relu'),
             tf.keras.layers.Dense(self.hyperparameterGeneratorDim, activation='relu'),
             # tf.keras.layers.Dense(self.weightsPerLayer, activation='tanh'),
             tf.keras.layers.Dense(self.weightsPerLayer)
@@ -101,6 +103,7 @@ class stageEncoder(tf.keras.Model):
 
         self.encoderNet = tf.keras.models.Sequential([
             tf.keras.layers.InputLayer(input_shape=(1, inputLength)),
+            # tf.keras.layers.Dense(h_dim, activation='relu'),
             tf.keras.layers.Dense(h_dim, activation='tanh'),
             tf.keras.layers.Dense(h_dim)
         ])
@@ -113,15 +116,15 @@ class stageDecoder(tf.keras.Model):
     def __init__(self, inputLength, h_dim):
         super().__init__()
 
-        self.encoderNet = tf.keras.models.Sequential([
+        self.decoderNet = tf.keras.models.Sequential([
             tf.keras.layers.InputLayer(input_shape=(1, h_dim + 1)),
-            # tf.keras.layers.Dense(inputLength, activation='tanh')
-            tf.keras.layers.Dense(inputLength, activation='exponential'),
+            tf.keras.layers.Dense(inputLength, activation='relu'),
+            # tf.keras.layers.Dense(inputLength, activation='exponential'),
             tf.keras.layers.Dense(inputLength)
         ])
 
     def call(self, inputs, training=None, mask=None):
-        return self.encoderNet(inputs)
+        return self.decoderNet(inputs)
 
 class objectiveDecoder(tf.keras.Model):
     def __init__(self, numObjectives, numStages, h_dim):
@@ -129,7 +132,9 @@ class objectiveDecoder(tf.keras.Model):
 
         self.encoderNet = tf.keras.models.Sequential([
             tf.keras.layers.InputLayer(input_shape=(numStages*h_dim,)),
-            tf.keras.layers.Dense(numObjectives, activation='exponential'),
+            # tf.keras.layers.Dense(numObjectives, activation='exponential'),
+            tf.keras.layers.Dense(numObjectives, activation='relu'),
+            # tf.keras.layers.Dense(numObjectives, activation='relu'),
             tf.keras.layers.Dense(numObjectives)
         ])
 

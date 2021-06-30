@@ -30,7 +30,7 @@ def createHyperparameterLenDict(model):
     hyperparameterLenDict = {}
     for index, layer in enumerate(model.typeLayer):
         hyperparameterLenDict['layer{}'.format(index)] = []
-        print('dict: {}, {} '.format(layer.name,layer.weights))
+        # print('dict: {}, {} '.format(layer.name,layer.weights))
         for weight in layer.weights:
             hyperparameterLenDict['layer{}'.format(index)].append(weight.shape)
     return hyperparameterLenDict
